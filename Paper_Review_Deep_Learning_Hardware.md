@@ -1,7 +1,7 @@
 Paper Review: Deep Learning Hardware (ISSCC, 2019)
 ===
 
-###### tags: AAML
+###### tags: `AAML`
 
 * Deep Learning Hardware: Past, Present, and Future
     * Published in ISSCC, 2019 by Yann LeCun
