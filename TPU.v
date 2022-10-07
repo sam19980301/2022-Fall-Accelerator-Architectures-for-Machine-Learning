@@ -70,8 +70,9 @@ reg     [5:0] cnt;          // A_row_tile counting
 reg     [5:0] subcnt;       // B_col_tile counting
 reg     [8:0] tile_cycle;   // within_tilke cycle counting
 reg     [1:0] write_cycle;  // writing cycle counting
-wire    not_finish_feedsig, finish_tile, finish_tiles, finish_calc;
-reg     finish_write;
+wire    last_tile, last_tiles;
+wire    not_finish_feedsig, finish_tile, finish_tiles, finish_calc, finish_write;
+reg     [1:0] last_write_cycle;
 
 // metadata information
 reg     [7:0] A_row, A_col, B_row, B_col;
@@ -113,27 +114,25 @@ always @(*) begin
         default:                        next_state = current_state;
     endcase
 end
-assign not_finish_feedsig = (current_state == STATE_CALC) && (tile_cycle <= A_col - 1); // TBD not yet understand // early stop rather than padding last tile of A_col
+assign last_tile =          (B_col_tile == subcnt);
+assign last_tiles =         (A_row_tile == cnt);
+assign not_finish_feedsig = (current_state == STATE_CALC) && (tile_cycle <= A_col - 1);
 assign finish_tile =        (tile_cycle == A_col + 7);
-assign finish_tiles =       (B_col_tile == subcnt) && (finish_tile);
-assign finish_calc =        (A_row_tile == cnt) && (finish_tiles);
+assign finish_tiles =       (last_tile) && (finish_tile);
+assign finish_calc =        (last_tiles) && (finish_tiles);
+assign finish_write =       (current_state == STATE_WRITE) && (write_cycle == last_write_cycle);
 always @(*) begin
-    finish_write = (current_state == STATE_WRITE) && (write_cycle == 3);
+    if (last_tiles) begin // consider the last tile for each row of output matrix
+        case (B_col[1:0])
+            'd0:        last_write_cycle = 3;
+            'd1:        last_write_cycle = 0;
+            'd2:        last_write_cycle = 1;
+            'd3:        last_write_cycle = 2;
+            default:    last_write_cycle = 0;
+        endcase
+    end
+    else                last_write_cycle = 3;
 end
-// always @(*) begin
-//     if (finish_tiles) begin
-//         // finish_write = (current_state == STATE_WRITE) && (write_cycle == 0);
-//         case (B_col[1:0])
-//             'd0: finish_write = (write_cycle == 3);
-//             'd1: finish_write = (write_cycle == 0);
-//             'd2: finish_write = (write_cycle == 1);
-//             'd3: finish_write = (write_cycle == 2);
-//             default: finish_write = finish_write;
-//         endcase
-//     end
-//     else finish_write = (write_cycle == 3);
-//     finish_write = finish_write && (current_state == STATE_WRITE);
-// end
 
 // counter information
 always @(posedge clk or negedge rst_n) begin
@@ -177,12 +176,12 @@ assign B_wr_en =    0;
 assign B_index =    subcnt * B_row + tile_cycle;
 assign B_data_in =  0;
 assign C_wr_en =    (current_state == STATE_WRITE);
-assign C_index =    (subcnt * A_row + cnt * 4) + write_cycle; // TBD the memory format of SRAM C (w transpose)
+assign C_index =    (subcnt * A_row + cnt * 4) + write_cycle; // memory format of SRAM C: tile-based w/o transpose
 assign C_data_in =  C_data_in_reg;
 always @(*) begin
     case (write_cycle)
-        // TBD last tile issue
-        'd0:        C_data_in_reg = {out_sum_arr[0][0], out_sum_arr[0][1], out_sum_arr[0][2], out_sum_arr[0][3]}; // memory format
+        // memory format
+        'd0:        C_data_in_reg = {out_sum_arr[0][0], out_sum_arr[0][1], out_sum_arr[0][2], out_sum_arr[0][3]};
         'd1:        C_data_in_reg = {out_sum_arr[1][0], out_sum_arr[1][1], out_sum_arr[1][2], out_sum_arr[1][3]};
         'd2:        C_data_in_reg = {out_sum_arr[2][0], out_sum_arr[2][1], out_sum_arr[2][2], out_sum_arr[2][3]};
         'd3:        C_data_in_reg = {out_sum_arr[3][0], out_sum_arr[3][1], out_sum_arr[3][2], out_sum_arr[3][3]};
