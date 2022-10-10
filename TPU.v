@@ -99,17 +99,26 @@ always @(posedge clk or negedge rst_n) begin
 end
 
 // next state
+// always @(*) begin
+//     next_state = current_state;
+//     case (current_state)
+//         STATE_IDLE: if (in_valid)       next_state = STATE_CALC;
+//         STATE_CALC: if (finish_tile)    next_state = STATE_WRITE;
+//         STATE_WRITE: begin
+//             if (finish_write) begin
+//                 if (finish_calc)        next_state = STATE_OUTPUT;
+//                 else                    next_state = STATE_CALC;
+//             end
+//         end
+//         STATE_OUTPUT:                   next_state = STATE_IDLE;
+//         default:                        next_state = current_state;
+//     endcase
+// end
 always @(*) begin
     next_state = current_state;
     case (current_state)
         STATE_IDLE: if (in_valid)       next_state = STATE_CALC;
-        STATE_CALC: if (finish_tile)    next_state = STATE_WRITE;
-        STATE_WRITE: begin
-            if (finish_write) begin
-                if (finish_calc)        next_state = STATE_OUTPUT;
-                else                    next_state = STATE_CALC;
-            end
-        end
+        STATE_CALC:                     next_state = STATE_OUTPUT;
         STATE_OUTPUT:                   next_state = STATE_IDLE;
         default:                        next_state = current_state;
     endcase
