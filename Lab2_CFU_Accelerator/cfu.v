@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-`include "TPU.v"
 `include "global_buffer.v"
+`include "TPU.v"
 
 module Cfu (
   input               cmd_valid,
@@ -66,11 +66,11 @@ reg     [31:0] single_acc_result;
 
 // Global Buffer Signal
 wire    A_wr_en, B_wr_en, C_wr_en;
-wire    [GBUFF_ADDR_BITS-1:0] A_index, B_index, C_index;
-wire    [I_GBUFF_DATA_BITS:0] A_data_in, B_data_in;
-wire    [O_GBUFF_DATA_BITS:0] C_data_in;
-wire    [I_GBUFF_DATA_BITS-1] A_data_out, B_data_out;
-wire    [O_GBUFF_DATA_BITS:0] C_data_out;
+wire    [  GBUFF_ADDR_BITS-1:0] A_index, B_index, C_index;
+wire    [I_GBUFF_DATA_BITS-1:0] A_data_in, B_data_in;
+wire    [O_GBUFF_DATA_BITS-1:0] C_data_in;
+wire    [I_GBUFF_DATA_BITS-1:0] A_data_out, B_data_out;
+wire    [O_GBUFF_DATA_BITS-1:0] C_data_out;
 
 wire    is_store_A, is_store_B;
 
@@ -125,7 +125,7 @@ assign rsp_payload_outputs_0 = single_acc_result;
 
 always @(posedge clk or posedge reset) begin
     if (reset)          single_acc_result <= 0;
-    else if (curr_state == STATE_WAIT) begin
+    else if (current_state == STATE_WAIT) begin
         case (cmd_payload_inputs_0_buf[1:0])
             0:          single_acc_result <= C_data_out[ 31: 0];
             1:          single_acc_result <= C_data_out[ 63:32];
@@ -143,7 +143,7 @@ always @(posedge clk or posedge reset) begin
         K <= 0;
         N <= 0;
     end
-    else if (in_valid) begin
+    else if (cmd_valid) begin
         // cfu_op3(/* funct7= */ 0, output_height * output_width, input_depth << 16 + output_depth);
         M <= cmd_payload_inputs_0;
         K <= cmd_payload_inputs_1[31:16];
@@ -185,13 +185,13 @@ global_buffer #( .ADDR_BITS(GBUFF_ADDR_BITS), .DATA_BITS(O_GBUFF_DATA_BITS)) gbu
     .data_out(C_data_out)
 );
 
-assign A_wr_en = (curr_state == STATE_CALC) ? A_wr_en_TPU : A_wr_en_CPU;
-assign B_wr_en = (curr_state == STATE_CALC) ? B_wr_en_TPU : B_wr_en_CPU;
-assign C_wr_en = (curr_state == STATE_CALC) ? C_wr_en_TPU : 0;
+assign A_wr_en = (current_state == STATE_CALC) ? A_wr_en_TPU : A_wr_en_CPU;
+assign B_wr_en = (current_state == STATE_CALC) ? B_wr_en_TPU : B_wr_en_CPU;
+assign C_wr_en = (current_state == STATE_CALC) ? C_wr_en_TPU : 0;
 
-assign A_index = (curr_state == STATE_CALC) ? A_index_TPU : A_index_CPU;
-assign B_index = (curr_state == STATE_CALC) ? B_index_TPU : B_index_CPU;
-assign C_index = (curr_state == STATE_CALC) ? C_index_TPU : C_index_CPU;
+assign A_index = (current_state == STATE_CALC) ? A_index_TPU : A_index_CPU;
+assign B_index = (current_state == STATE_CALC) ? B_index_TPU : B_index_CPU;
+assign C_index = (current_state == STATE_CALC) ? C_index_TPU : C_index_CPU;
 
 assign A_data_in = cmd_payload_inputs_0_buf;
 assign B_data_in = cmd_payload_inputs_0_buf;
@@ -235,29 +235,29 @@ end
 // TPU
 
 TPU tpu(
-  .clk(clk);
-  .rst_n(!reset);
-  .in_valid(is_op3);
+  .clk(clk),
+  .rst_n(!reset),
+  .in_valid(is_op3),
 
-  .K(K);
-  .M(M);
-  .N(N);
-  .busy(busy_TPU);
+  .K(K),
+  .M(M),
+  .N(N),
+  .busy(busy_TPU),
 
-  .A_wr_en(A_wr_en_TPU);
-  .A_index(A_index_TPU);
-  .A_data_in();
-  .A_data_out(A_data_out);
+  .A_wr_en(A_wr_en_TPU),
+  .A_index(A_index_TPU),
+  .A_data_in(),
+  .A_data_out(A_data_out),
 
-  .B_wr_en(B_wr_en_TPU);
-  .B_index(B_index_TPU);
-  .B_data_in();
-  .B_data_out(B_data_out);
+  .B_wr_en(B_wr_en_TPU),
+  .B_index(B_index_TPU),
+  .B_data_in(),
+  .B_data_out(B_data_out),
 
-  .C_wr_en(C_wr_en_TPU);
-  .C_index(C_index_TPU);
-  .C_data_in(C_data_in);
-  .C_data_out();
+  .C_wr_en(C_wr_en_TPU),
+  .C_index(C_index_TPU),
+  .C_data_in(C_data_in),
+  .C_data_out()
 );
   
 endmodule

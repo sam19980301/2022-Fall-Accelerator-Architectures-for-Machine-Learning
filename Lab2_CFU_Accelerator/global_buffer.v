@@ -5,7 +5,8 @@
 // authors: kaikai (deekai9139@gmail.com)                                     //
 //          suhan  (jjs93126@gmail.com)                                       //
 //============================================================================//
-module global_buffer #(parameter ADDR_BITS=8, parameter DATA_BITS=8)(clk, rst_n, wr_en, index, data_in, data_out);
+// module global_buffer #(parameter ADDR_BITS=8, parameter DATA_BITS=8)(clk, rst_n, wr_en, index, data_in, data_out);
+module global_buffer #(parameter ADDR_BITS=8, parameter DATA_BITS=8)(clk, wr_en, index, data_in, data_out);
 
   input clk;
   // input rst_n;
