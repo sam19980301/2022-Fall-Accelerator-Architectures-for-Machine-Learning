@@ -28,27 +28,26 @@ module TPU(
 input clk;
 input rst_n;
 input            in_valid;
+input [8:0]      K;
+input [8:0]      M;
+input [8:0]      N;
 // input [7:0]      K;
-input [7:0]     K;
-input [11:0]      M;
-input [7:0]      N;
+// input [7:0]      M;
+// input [7:0]      N;
 output  reg      busy;
 
 output           A_wr_en;
-// output [15:0]    A_index;
-output [13:0]    A_index;
+output [15:0]    A_index;
 output [31:0]    A_data_in;
 input  [31:0]    A_data_out;
 
 output           B_wr_en;
-// output [15:0]    B_index;
-output [13:0]    B_index;
+output [15:0]    B_index;
 output [31:0]    B_data_in;
 input  [31:0]    B_data_out;
 
 output           C_wr_en;
-// output [15:0]    C_index;
-output [13:0]    C_index;
+output [15:0]    C_index;
 output [127:0]   C_data_in;
 input  [127:0]   C_data_out;
 
@@ -71,9 +70,11 @@ genvar idx, idy;
 // FSM
 reg     [1:0] current_state, next_state;
 // reg     [5:0] cnt;          // A_row_tile counting
-reg     [9:0] cnt;          // A_row_tile counting
-reg     [5:0] subcnt;       // B_col_tile counting
-reg     [8:0] tile_cycle;   // within_tile cycle counting
+// reg     [5:0] subcnt;       // B_col_tile counting
+// reg     [8:0] tile_cycle;   // within_tilke cycle counting
+reg     [6:0] cnt;          // A_row_tile counting
+reg     [6:0] subcnt;       // B_col_tile counting
+reg     [9:0] tile_cycle;   // within_tilke cycle counting
 reg     [1:0] write_cycle;  // writing cycle counting
 wire    last_tile, last_tiles;
 wire    not_finish_feedsig, finish_tile, finish_tiles, finish_calc, finish_write;
@@ -81,11 +82,10 @@ reg     [1:0] last_write_cycle;
 
 // metadata information
 // reg     [7:0] A_row, A_col, B_row, B_col;
-reg     [11:0] A_row;
-reg     [7:0]  A_col, B_row, B_col;
-// wire    [5:0]  A_row_tile, B_col_tile;
-wire    [7:0]  A_row_tile;
-wire    [5:0]  B_col_tile;
+// wire    [5:0] A_row_tile, B_col_tile;
+// TBD A_row_tile should be modified below
+reg     [8:0] A_row, A_col, B_row, B_col;
+wire    [6:0] A_row_tile, B_col_tile;
 
 // SRAM signals
 reg     [127:0] C_data_in_reg;
@@ -112,7 +112,13 @@ always @(*) begin
     next_state = current_state;
     case (current_state)
         STATE_IDLE: if (in_valid)       next_state = STATE_CALC;
-        STATE_CALC:                     next_state = STATE_OUTPUT;
+        STATE_CALC: if (finish_tile)    next_state = STATE_WRITE;
+        STATE_WRITE: begin
+            if (finish_write) begin
+                if (finish_calc)        next_state = STATE_OUTPUT;
+                else                    next_state = STATE_CALC;
+            end
+        end
         STATE_OUTPUT:                   next_state = STATE_IDLE;
         default:                        next_state = current_state;
     endcase
@@ -120,22 +126,10 @@ end
 assign last_tile =          (B_col_tile == subcnt);
 assign last_tiles =         (A_row_tile == cnt);
 assign not_finish_feedsig = (current_state == STATE_CALC) && (tile_cycle <= A_col - 1);
-assign finish_tile =        (tile_cycle == A_col + 7);
+assign finish_tile =        (tile_cycle == A_col + 6);
 assign finish_tiles =       (last_tile) && (finish_tile);
 assign finish_calc =        (last_tiles) && (finish_tiles);
-assign finish_write =       (current_state == STATE_WRITE) && (write_cycle == last_write_cycle);
-always @(*) begin
-    if (last_tiles) begin // consider the last tile for each row of output matrix
-        case (B_col[1:0])
-            'd0:        last_write_cycle = 3;
-            'd1:        last_write_cycle = 0;
-            'd2:        last_write_cycle = 1;
-            'd3:        last_write_cycle = 2;
-            default:    last_write_cycle = 0;
-        endcase
-    end
-    else                last_write_cycle = 3;
-end
+assign finish_write =       (current_state == STATE_WRITE) && (write_cycle == 3);
 
 // counter information
 always @(posedge clk or negedge rst_n) begin
@@ -178,7 +172,9 @@ assign A_data_in =  0;
 assign B_wr_en =    0;
 assign B_index =    subcnt * B_row + tile_cycle;
 assign B_data_in =  0;
-assign C_wr_en =    (current_state == STATE_WRITE);
+// Writing back to C could be performed after the completion of PE[0,0] / PE[3,3]
+// Current implementation is the latter one, which is simpler
+assign C_wr_en =    (current_state == STATE_WRITE) && !(last_tiles && (|A_row[1:0]) && (A_row[1:0] <= write_cycle)); // not writing back last padding rows
 assign C_index =    (subcnt * A_row + cnt * 4) + write_cycle; // memory format of SRAM C: tile-based w/o transpose
 assign C_data_in =  C_data_in_reg;
 always @(*) begin
@@ -208,8 +204,11 @@ end
 always @(*) begin
     B_row = A_col;
 end
-assign A_row_tile = A_row[7:2] + |A_row[1:0] - 1; // zero-indexed
-assign B_col_tile = B_col[7:2] + |B_col[1:0] - 1; // zero-indexed
+// TBD
+// assign A_row_tile = A_row[7:2] + |A_row[1:0] - 1; // zero-indexed
+// assign B_col_tile = B_col[7:2] + |B_col[1:0] - 1; // zero-indexed
+assign A_row_tile = A_row[8:2] + |A_row[1:0] - 1; // zero-indexed
+assign B_col_tile = B_col[8:2] + |B_col[1:0] - 1; // zero-indexed
 
 // Cycle    PE[0][0]                                    PE[0][1]        PE[0][2]        PE[0][3]        PE[1][3]        PE[2][3]        PE[3][3]
 // -1       Set SRAM signal A[0,0],B[0,0]
@@ -223,35 +222,13 @@ assign B_col_tile = B_col[7:2] + |B_col[1:0] - 1; // zero-indexed
 //  7       Cal A[0,6]*B[6,0]                           A[0,5]*B[5,1]   A[0,4]*B[4,2]   A[0,3]*B[3,3]   A[1,2]*B[2,3]   A[2,1]*B[1,3]   A[3,0]*B[0,3]
 //  8       Cal A[0,7]*B[7,0]                           A[0,6]*B[6,1]   A[0,5]*B[5,2]   A[0,4]*B[4,3]   A[1,3]*B[3,3]   A[2,2]*B[2,3]   A[3,1]*B[1,3]
 // ...
-// K+1      Cal A[0,K]*B[K,0]
-// K+2                                                  A[0,K]*B[K,1]
-// K+3                                                                  A[0,K]*B[K,2]
-// K+4                                                                                  A[0,K]*B[K,3]
-// K+5                                                                                                  A[1,K]*B[K,3]
-// K+6                                                                                                                  A[2,K]*B[K,3]
-// K+7                                                                                                                                  A[3,K]*B[K,3]
-
-// Writing back to C could be performed after the completion of PE[0,0] / PE[3,3]
-// Current implementation is the latter one, which is simpler
-// FSM State    Cycle       Operation
-// STATE_CALC   K+1 / -1    Finish calculating C[0,0]
-// STATE_CALC   K+2 /  0    Set SRAM signal C[0,0]
-// STATE_CALC   K+3 /  1    Set SRAM singal C[0,1]
-// STATE_CALC   K+4 /  2    Set SRAM singal C[0,2]
-// STATE_CALC   K+5 /  3    Set SRAM singal C[0,3]
-// STATE_CALC   K+6 /  4    Set SRAM singal C[1,0]
-// STATE_CALC   K+7 /  5    Set SRAM singal C[1,1]
-// STATE_WRITE   0  /  6    Set SRAM signal C[1,2]
-// STATE_WRITE   1  /  7    Set SRAM signal C[1,3]
-// STATE_WRITE   2  /  8    Set SRAM signal C[2,0]
-// STATE_WRITE   3  /  9    Set SRAM signal C[2,1]
-// STATE_WRITE   4  / 10    Set SRAM signal C[2,2]
-// STATE_WRITE   5  / 11    Set SRAM signal C[2,3]
-// STATE_WRITE   6  / 12    Set SRAM signal C[3,0]
-// STATE_WRITE   7  / 13    Set SRAM signal C[3,1]
-// STATE_WRITE   8  / 14    Set SRAM signal C[3,2]
-// STATE_WRITE   9  / 15    Set SRAM signal C[3,3]
-// STATE_WRITE  10  / 16    Finish writing SRAM C[3,3]
+//  K       Cal A[0,K']*B[K',0] (K' = K-1)
+// K+1                                                  A[0,K']*B[K',1] 
+// K+2                                                                  A[0,K']*B[K',2]
+// K+3                                                                                  A[0,K']*B[K',3]
+// K+4                                                                                                  A[1,K']*B[K',3]
+// K+5                                                                                                                  A[2,K']*B[K',3]
+// K+6                                                                                                                                  A[3,K']*B[K',3]
 
 // PE port
 // in_top_buf_arr & in_left_buf_arr
@@ -344,14 +321,18 @@ input clk;
 input rst_n;
 
 input reset;
-input       [ 7:0]  in_top, in_left;
-output reg  [ 7:0]  out_bot, out_right;
-output reg  [31:0]  out_sum;
+input               [ 7:0]  in_top, in_left;
+output reg          [ 7:0]  out_bot, out_right;
+output reg signed   [31:0]  out_sum;
+
+localparam InputOffset = $signed(9'd128);
 
 // ===============================================================
 //                      Wire & Register
 // ===============================================================
 
+wire signed [ 7:0] operand_1, operand_2;
+wire signed [15:0] prod;
 // ===============================================================
 //                          Design
 // ===============================================================
@@ -359,8 +340,13 @@ output reg  [31:0]  out_sum;
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n)     out_sum <= 0;
     else if (reset) out_sum <= 0;
-    else            out_sum <= out_sum + in_top * in_left;
+    // else            out_sum <= out_sum + prod;
+    else            out_sum <= out_sum + ($signed(in_left) + InputOffset) * $signed(in_top);
 end
+
+assign operand_1 =  in_left ^8'h80;
+assign operand_2 =  in_top;
+assign prod =       operand_1 * operand_2;
 
 // Output Port
 always @(posedge clk or negedge rst_n) begin
@@ -376,3 +362,53 @@ always @(posedge clk or negedge rst_n) begin
 end
 
 endmodule
+
+// // Processing Element (output stationary)
+// module PE (
+//     clk,
+//     rst_n,
+
+//     reset,
+//     in_top,
+//     in_left,
+//     out_bot,
+//     out_right,
+//     out_sum
+// );
+
+// input clk;
+// input rst_n;
+
+// input reset;
+// input       [ 7:0]  in_top, in_left;
+// output reg  [ 7:0]  out_bot, out_right;
+// output reg  [31:0]  out_sum;
+
+// // ===============================================================
+// //                      Wire & Register
+// // ===============================================================
+
+// // ===============================================================
+// //                          Design
+// // ===============================================================
+// // Accumulated Sum
+// always @(posedge clk or negedge rst_n) begin
+//     if (!rst_n)     out_sum <= 0;
+//     else if (reset) out_sum <= 0;
+//     else            out_sum <= out_sum + in_top * in_left;
+// end
+
+// // Output Port
+// always @(posedge clk or negedge rst_n) begin
+//     if (!rst_n)     out_bot <= 0;
+//     // else if (reset) out_bot <= 0;
+//     else            out_bot <= in_top;
+// end
+
+// always @(posedge clk or negedge rst_n) begin
+//     if (!rst_n)     out_right <= 0;
+//     // else if (reset) out_right <= 0;
+//     else            out_right <= in_left;
+// end
+
+// endmodule

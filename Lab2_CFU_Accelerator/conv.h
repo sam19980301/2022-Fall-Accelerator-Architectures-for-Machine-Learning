@@ -20,9 +20,16 @@ limitations under the License.
 #include "tensorflow/lite/kernels/internal/common.h"
 #include "tensorflow/lite/kernels/internal/portable_tensor_utils.h"
 
-// #include "perf.h"
+#include "perf.h"
 #include "cfu.h"
 #include <stdio.h>
+
+#define LOAD_A  0
+#define LOAD_B  1
+#define LOAD_C  2
+#define STORE_A 3
+#define STORE_B 4
+#define STORE_C 5
 
 namespace tflite {
 namespace reference_integer_ops {
@@ -59,123 +66,135 @@ inline void ConvPerChannel(
   const int output_height = output_shape.Dims(1);
   const int output_width = output_shape.Dims(2);
 
-  // Initial Reset
-  cfu_op0(/* funct7= */ 0, 0, 0); // reset CFU
-
-  // Store the data to glbal buffer A
-  for (int out_y = 0; out_y < output_height; ++out_y) {
-    for (int out_x = 0; out_x < output_width; ++out_x) {
-      for (int in_channel = 0; in_channel < input_depth; in_channel += 4) {
-        // input_val_1[31:0] = {offset[3], offset[2], offset[1], offset[0]}, and each of the 4 int8 should do XOR-operation with x80 (done in CFU) 
-        uint32_t input_val_1 = *((uint32_t *)(input_data + Offset(input_shape, 0, out_y, out_x, in_channel)));
-        // uint32_t input_val_2 = *((uint32_t *)(input_data + Offset(input_shape, 0, out_y, out_x, in_channel + 4)));
-        cfu_op1(/* funct7= */ 0, input_val_1, 0);
-      }
-    }
-  }
-
+  // perf_enable_counter(0);
   // Store the data to global buffer B
-  for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-    for (int in_channel = 0; in_channel < input_depth; in_channel += 4) {
-      uint32_t filter_val_1 = *((uint32_t *)(filter_data + Offset(filter_shape, out_channel, 0, 0, in_channel)));
-      // uint32_t filter_val_2 = *((uint32_t *)(filter_data + Offset(filter_shape, out_channel, 0, 0, in_channel + 4)));
-      cfu_op1(/* funct7= */ 1, filter_val_1, 0);
+  int cnt_b = 0;
+  for (int out_channel = 0; out_channel < output_depth; out_channel += 4) {
+    for (int in_channel = 0; in_channel < input_depth; ++in_channel) {
+      int32_t filter_val_0 = (out_channel + 0 < output_depth) ? filter_data[Offset(filter_shape, out_channel + 0, 0, 0, in_channel)] : 0;
+      int32_t filter_val_1 = (out_channel + 1 < output_depth) ? filter_data[Offset(filter_shape, out_channel + 1, 0, 0, in_channel)] : 0;
+      int32_t filter_val_2 = (out_channel + 2 < output_depth) ? filter_data[Offset(filter_shape, out_channel + 2, 0, 0, in_channel)] : 0;
+      int32_t filter_val_3 = (out_channel + 3 < output_depth) ? filter_data[Offset(filter_shape, out_channel + 3, 0, 0, in_channel)] : 0;
+      filter_val_0 = (filter_val_0 & 0x000000ff) << 24;
+      filter_val_1 = (filter_val_1 & 0x000000ff) << 16;
+      filter_val_2 = (filter_val_2 & 0x000000ff) <<  8;
+      filter_val_3 = (filter_val_3 & 0x000000ff) <<  0;
+      int32_t filter_val = filter_val_0 | filter_val_1 | filter_val_2 | filter_val_3;
+      cfu_op0(/* funct7= */ STORE_B, cnt_b, filter_val);
+      // printf("%d, %lx\n", cnt_b, filter_val);
+      cnt_b++;
     }
   }
+  // // for (int i = 0; i < 32; i++)
+  // // {
+  // //   int32_t test = cfu_op0(/* funct7= */ 0, i, 0);
+  // //   printf("%d, %lx\n", i, test);
+  // // }
+  // // exit(0);
 
-  // Perform matrix multiplication
-  // const int M = output_height * output_width;
-  // const int K = input_depth;
-  // const int N = output_depth;
-  cfu_op3(/* funct7= */ 0, output_height * output_width, input_depth << 16 + output_depth);
-
-  // Load the data from global buffer C
-  int c_index = 0;
+  
   for (int out_y = 0; out_y < output_height; ++out_y) {
-    for (int out_x = 0; out_x < output_width; ++out_x) {
-      for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-        // int32_t acc = cfu_op3(/* funct7= */ 0, out_y * output_width + out_x, out_channel);
-        int32_t acc = cfu_op2(/* funct7= */ 0, c_index++, 0);
-        if (bias_data)
-          acc += bias_data[out_channel];
-        acc = MultiplyByQuantizedMultiplier(acc, output_multiplier[out_channel], output_shift[out_channel]);
-        acc += output_offset;
-        acc = std::max(acc, output_activation_min);
-        acc = std::min(acc, output_activation_max);
-        output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] = static_cast<int8_t>(acc);
+
+    if (0){ // 48 24 12 6 3 1
+      // printf("test\n");
+      // Store the data to glbal buffer A
+      int cnt_a = 0;
+      // printf("test 1\n");
+      for (int out_x = 0; out_x < output_width; out_x += 4) {
+        for (int in_channel = 0; in_channel < input_depth; ++in_channel) {
+          // TBD could skip the bound checking
+          int32_t input_val_0 = (out_x + 0 < output_width) ? input_data[Offset(input_shape, 0, out_y, out_x + 0, in_channel)] : 0;
+          int32_t input_val_1 = (out_x + 1 < output_width) ? input_data[Offset(input_shape, 0, out_y, out_x + 1, in_channel)] : 0;
+          int32_t input_val_2 = (out_x + 2 < output_width) ? input_data[Offset(input_shape, 0, out_y, out_x + 2, in_channel)] : 0;
+          int32_t input_val_3 = (out_x + 3 < output_width) ? input_data[Offset(input_shape, 0, out_y, out_x + 3, in_channel)] : 0;
+          input_val_0 = (input_val_0 & 0x000000ff) << 24;
+          input_val_1 = (input_val_1 & 0x000000ff) << 16;
+          input_val_2 = (input_val_2 & 0x000000ff) <<  8;
+          input_val_3 = (input_val_3 & 0x000000ff) <<  0;
+          int32_t input_val = input_val_0 | input_val_1 | input_val_2 | input_val_3;
+          cfu_op0(/* funct7= */ STORE_A, cnt_a, input_val);
+          // printf("%d, %lx\n", cnt_a, input_val);
+          cnt_a++;
+        }
+        // for (int i = 0; i < 8; i++)
+        // {
+        //   int32_t test = cfu_op0(/* funct7= */ 0, i, 0);
+        //   printf("%d, %lx\n", i, test);
+        // }
+        // exit(0);
+      }
+      // printf("test 2\n");
+      // Perform matrix multiplication A[M,K] @ B[K,N]
+      cfu_op1(/* funct7= */ 0, output_width, (input_depth << 16) + output_depth); // M, K & N
+      // TBD add this (for HW=6 convolution layer) or directly avoid the tiling --> only in simulation
+      // printf("test 3\n");
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+      // cfu_op0(/* funct7= */ LOAD_C, 0, 0);
+      // printf("test 4\n");
+      // Load the data from global buffer C
+      for (int out_x = 0; out_x < output_width; ++out_x) {
+        for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
+          int c_index = ((out_channel / 4) * (output_width) + out_x) * 4 + (out_channel % 4);
+          int32_t acc = cfu_op0(/* funct7= */ LOAD_C, c_index, 0);
+          // printf("out_y %d out_x %d out_channel %d Acc: %lx\n", out_y, out_x, out_channel, acc);
+          if (bias_data)
+            acc += bias_data[out_channel];
+          acc = MultiplyByQuantizedMultiplier(acc, output_multiplier[out_channel], output_shift[out_channel]);
+          acc += output_offset;
+          acc = std::max(acc, output_activation_min);
+          acc = std::min(acc, output_activation_max);
+          output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] = static_cast<int8_t>(acc);
+        }
       }
     }
+
+    // DEBUG
+    else
+    {
+      for (int out_x = 0; out_x < output_width; ++out_x) {
+        for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
+          int32_t acc = 0;
+          for (int in_channel = 0; in_channel < input_depth; in_channel += 4) {
+            uint32_t input_val = *((uint32_t *)(input_data + Offset(input_shape, 0, out_y, out_x, in_channel)));
+            // if ((output_height == 12) && (out_channel == 0) && (out_y == 0) && (out_x == 0))
+            //   printf("out_y %d out_x %d out_channel %d in_channel %d input_val: %lx\n", out_y, out_x, out_channel, in_channel, input_val);
+            input_val ^= 0x80808080;
+            uint32_t filter_val = *((uint32_t *)(filter_data + Offset(filter_shape, out_channel, 0, 0, in_channel)));
+            // if ((output_height == 12) && (out_channel == 0) && (out_y == 0) && (out_x == 0))
+            //   printf("out_y %d out_x %d out_channel %d in_channel %d filter_val: %lx\n", out_y, out_x, out_channel, in_channel, filter_val);
+            acc += static_cast<int8_t>(filter_val >> 24) * static_cast<u_int8_t>(input_val >> 24);
+            acc += static_cast<int8_t>(filter_val >> 16) * static_cast<u_int8_t>(input_val >> 16);
+            acc += static_cast<int8_t>(filter_val >>  8) * static_cast<u_int8_t>(input_val >>  8);
+            acc += static_cast<int8_t>(filter_val >>  0) * static_cast<u_int8_t>(input_val >>  0);
+            // if ((output_height == 3) && (out_channel == 0) && (out_y == 0) && (out_x == 0) && (input_depth == 256))
+            //   printf("out_y %d out_x %d out_channel %d in_channel %d acc: %lx\n", out_y, out_x, out_channel, in_channel, acc);
+          }
+          // if ((output_height == 3) && (input_depth == 256))
+          //   printf("out_y %d out_x %d out_channel %d Acc: %lx\n", out_y, out_x, out_channel, acc);
+          if (bias_data)
+            acc += bias_data[out_channel];
+          acc = MultiplyByQuantizedMultiplier(acc, output_multiplier[out_channel], output_shift[out_channel]);
+          acc += output_offset;
+          acc = std::max(acc, output_activation_min);
+          acc = std::min(acc, output_activation_max);
+          output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] = static_cast<int8_t>(acc);
+        }
+      }
+    }
+    // if (output_height == 3)
+    //   exit(0);
+    // perf_disable_counter(0);
   }
+  // if ((output_height == 3) && (input_depth == 256))
+  //   exit(0);
 }
-
-// // Fixed-point per-channel-quantization convolution reference kernel.
-// inline void ConvPerChannel(
-//     const ConvParams& params, const int32_t* output_multiplier,
-//     const int32_t* output_shift, const RuntimeShape& input_shape,
-//     const int8_t* input_data, const RuntimeShape& filter_shape,
-//     const int8_t* filter_data, const RuntimeShape& bias_shape,
-//     const int32_t* bias_data, const RuntimeShape& output_shape,
-//     int8_t* output_data) {
-//   // Get parameters.
-//   const int32_t output_offset = params.output_offset;
-
-//   // Set min and max value of the output.
-//   const int32_t output_activation_min = params.quantized_activation_min;
-//   const int32_t output_activation_max = params.quantized_activation_max;
-
-//   // Consistency check.
-//   TFLITE_DCHECK_LE(output_activation_min, output_activation_max);
-//   TFLITE_DCHECK_EQ(input_shape.DimensionsCount(), 4);
-//   TFLITE_DCHECK_EQ(filter_shape.DimensionsCount(), 4);
-//   TFLITE_DCHECK_EQ(output_shape.DimensionsCount(), 4);
-//   const int input_depth = input_shape.Dims(3);
-//   const int output_depth = MatchingDim(filter_shape, 0, output_shape, 3);
-//   if (bias_data) {
-//     TFLITE_DCHECK_EQ(bias_shape.FlatSize(), output_depth);
-//   }
-
-//   // Check dimensions of the tensors.
-//   const int filter_input_depth = filter_shape.Dims(3);
-//   TFLITE_DCHECK_EQ(input_depth % filter_input_depth, 0);
-//   const int output_height = output_shape.Dims(1);
-//   const int output_width = output_shape.Dims(2);
-//   for (int out_y = 0; out_y < output_height; ++out_y) {
-//     for (int out_x = 0; out_x < output_width; ++out_x) {
-//       for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-//         int32_t acc = 0;
-//         for (int in_channel = 0; in_channel < input_depth; in_channel += 4) {
-//           int32_t input_val = input_data[Offset(input_shape, 0, out_y, out_x, in_channel)];
-//           int32_t filter_val = filter_data[Offset(filter_shape, out_channel, 0, 0, in_channel)];
-//           acc += filter_val * (input_val + 128);
-
-//           input_val = input_data[Offset(input_shape, 0, out_y, out_x, in_channel + 1)];
-//           filter_val = filter_data[Offset(filter_shape, out_channel, 0, 0, in_channel + 1)];
-//           acc += filter_val * (input_val + 128);
-
-//           input_val = input_data[Offset(input_shape, 0, out_y, out_x, in_channel + 2)];
-//           filter_val = filter_data[Offset(filter_shape, out_channel, 0, 0, in_channel + 2)];
-//           acc += filter_val * (input_val + 128);
-
-//           input_val = input_data[Offset(input_shape, 0, out_y, out_x, in_channel + 3)];
-//           filter_val = filter_data[Offset(filter_shape, out_channel, 0, 0, in_channel + 3)];
-//           acc += filter_val * (input_val + 128);
-//         }
-
-
-//         if (bias_data) {
-//           acc += bias_data[out_channel];
-//         }
-//         acc = MultiplyByQuantizedMultiplier(
-//             acc, output_multiplier[out_channel], output_shift[out_channel]);
-//         acc += output_offset;
-//         acc = std::max(acc, output_activation_min);
-//         acc = std::min(acc, output_activation_max);
-//         output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
-//             static_cast<int8_t>(acc);
-//       }
-//     }
-//   }
-// }
 
 inline void ConvPerChannelWithPackedInt4Weights(
     const ConvParams& params, const int32_t* output_multiplier,
