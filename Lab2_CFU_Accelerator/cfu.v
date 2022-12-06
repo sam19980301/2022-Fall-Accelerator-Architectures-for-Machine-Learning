@@ -39,6 +39,8 @@ parameter STATE_CALC =      'd3;
 parameter STATE_OUTPUT =    'd4;
 
 // Global buffer
+// Ideally the ADDR_BITS would be 13 / 14 / 14 for fitting
+// Smaller ADDR_BITS to fit into FPGA board
 parameter A_GBUFF_ADDR_BITS =     8;
 parameter B_GBUFF_ADDR_BITS =    14;
 parameter C_GBUFF_ADDR_BITS =     8;
@@ -49,15 +51,18 @@ parameter A_GBUFF_DATA_BITS =    32;
 parameter B_GBUFF_DATA_BITS =    32;
 parameter C_GBUFF_DATA_BITS =   128;
 
+// TPU
+parameter TPU_ADDR_BITS = 9; // MAX_SHAPE: 256(511)
+// parameter TPU_ADDR_BITS = 12; // MAX_SHAPE: 2304(4095)
+
 // Spec
 // op0: Load Store 
 //      funct7 = 0: Load  A output = A[input_0]
 //      funct7 = 1: Load  B output = B[input_0]
-//      funct7 = 2: Load  C output = C[input_0]
-//      funct7 = 3: Store A A[input_0] = input_1
-//      funct7 = 4: Store B B[input_0] = input_1
+//      funct7 = 2: Load  C output = C[input_0]     (redundent)
+//      funct7 = 3: Store A A[input_0] = input_1    (redundent)
+//      funct7 = 4: Store B B[input_0] = input_1    (redundent)
 //      funct7 = 5: Store C C[input_0] = input_1
-
 // op1: Matrix Multiplication
 
 
@@ -76,8 +81,8 @@ wire    finish_calc;
 
 // Metadata Information
 // Matrix A[M,K] @ B[K,N]
-reg     [ 8:0] M;
-reg     [ 8:0] K, N;
+reg     [TPU_ADDR_BITS-1:0] M;
+reg     [TPU_ADDR_BITS-1:0] K, N;
 
 // output
 reg     [31:0] outputs_reg;
@@ -149,12 +154,12 @@ assign is_load =    is_load_A | is_load_B | is_load_C;
 assign is_store =   is_store_A | is_store_B | is_store_C;
 assign is_calc =    (current_state == STATE_IDLE) && (cmd_valid) && (opcode == 1);
 
-assign is_load_A =  (current_state == STATE_IDLE) && (cmd_valid) && (funct7 == 0) && (opcode == 0);
-assign is_load_B =  (current_state == STATE_IDLE) && (cmd_valid) && (funct7 == 1) && (opcode == 0);
-assign is_load_C =  (current_state == STATE_IDLE) && (cmd_valid) && (funct7 == 2) && (opcode == 0);
-assign is_store_A = (current_state == STATE_IDLE) && (cmd_valid) && (funct7 == 3) && (opcode == 0);
-assign is_store_B = (current_state == STATE_IDLE) && (cmd_valid) && (funct7 == 4) && (opcode == 0);
-assign is_store_C = (current_state == STATE_IDLE) && (cmd_valid) && (funct7 == 5) && (opcode == 0);
+assign is_load_A =  (current_state == STATE_IDLE) && (cmd_valid) && (opcode == 0) && (funct7 == 0);
+assign is_load_B =  (current_state == STATE_IDLE) && (cmd_valid) && (opcode == 0) && (funct7 == 1);
+assign is_load_C =  (current_state == STATE_IDLE) && (cmd_valid) && (opcode == 0) && (funct7 == 2);
+assign is_store_A = (current_state == STATE_IDLE) && (cmd_valid) && (opcode == 0) && (funct7 == 3);
+assign is_store_B = (current_state == STATE_IDLE) && (cmd_valid) && (opcode == 0) && (funct7 == 4);
+assign is_store_C = (current_state == STATE_IDLE) && (cmd_valid) && (opcode == 0) && (funct7 == 5);
 
 assign finish_calc = !busy_TPU;
 
@@ -162,8 +167,6 @@ assign finish_calc = !busy_TPU;
 assign rsp_valid = (current_state == STATE_OUTPUT);
 assign cmd_ready = ~rsp_valid;
 assign rsp_payload_outputs_0 = outputs_reg;
-
-// TBD have disabled load A & B now
 always @(posedge clk or posedge reset) begin
     if (reset)          outputs_reg <= 0;
     else if (current_state == STATE_LOAD) begin
@@ -176,11 +179,8 @@ always @(posedge clk or posedge reset) begin
     end
     else                outputs_reg <= outputs_reg;
 end
-// always @(posedge clk or posedge reset) begin
-//     if (reset)  outputs_reg <= 0;
-//     else        outputs_reg <= sub_C_data_out;
-// end
-// TBD truncated
+
+// TBD cmd_payload_inputs_0_last_cycle could be truncated, and the index decoding could be implented in hardware
 always @(*) begin
     case (cmd_payload_inputs_0_last_cycle[1:0])
         0: sub_C_data_out =         C_data_out[127:96];
@@ -261,7 +261,7 @@ always @(posedge clk or posedge reset) begin
 end
 
 // TPU
-TPU tpu(
+TPU #(.ADDR_BITS(TPU_ADDR_BITS)) tpu(
   .clk(clk),
   .rst_n(!reset),
   .in_valid(is_calc),
@@ -290,8 +290,7 @@ TPU tpu(
 always @(*) begin
     // A[M,K] @ B[K,N]
     M = cmd_payload_inputs_0;
-    K = cmd_payload_inputs_1[24:16];
-    N = cmd_payload_inputs_1[ 8: 0];
+    K = cmd_payload_inputs_1[31:16];
+    N = cmd_payload_inputs_1[15: 0];
 end
-
 endmodule

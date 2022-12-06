@@ -1,4 +1,4 @@
-module TPU(
+module TPU #(parameter ADDR_BITS = 8) (
     clk,
     rst_n,
 
@@ -28,12 +28,9 @@ module TPU(
 input clk;
 input rst_n;
 input            in_valid;
-input [8:0]      K;
-input [8:0]      M;
-input [8:0]      N;
-// input [7:0]      K;
-// input [7:0]      M;
-// input [7:0]      N;
+input [ADDR_BITS-1:0]      K;
+input [ADDR_BITS-1:0]      M;
+input [ADDR_BITS-1:0]      N;
 output  reg      busy;
 
 output           A_wr_en;
@@ -69,23 +66,17 @@ genvar idx, idy;
 // ===============================================================
 // FSM
 reg     [1:0] current_state, next_state;
-// reg     [5:0] cnt;          // A_row_tile counting
-// reg     [5:0] subcnt;       // B_col_tile counting
-// reg     [8:0] tile_cycle;   // within_tilke cycle counting
-reg     [6:0] cnt;          // A_row_tile counting
-reg     [6:0] subcnt;       // B_col_tile counting
-reg     [9:0] tile_cycle;   // within_tilke cycle counting
+reg     [ADDR_BITS-3:0] cnt;          // A_row_tile counting
+reg     [ADDR_BITS-3:0] subcnt;       // B_col_tile counting
+reg     [ADDR_BITS:0] tile_cycle;   // within_tilke cycle counting
 reg     [1:0] write_cycle;  // writing cycle counting
 wire    last_tile, last_tiles;
 wire    not_finish_feedsig, finish_tile, finish_tiles, finish_calc, finish_write;
 reg     [1:0] last_write_cycle;
 
 // metadata information
-// reg     [7:0] A_row, A_col, B_row, B_col;
-// wire    [5:0] A_row_tile, B_col_tile;
-// TBD A_row_tile should be modified below
-reg     [8:0] A_row, A_col, B_row, B_col;
-wire    [6:0] A_row_tile, B_col_tile;
+reg     [ADDR_BITS-1:0] A_row, A_col, B_row, B_col;
+wire    [ADDR_BITS-3:0] A_row_tile, B_col_tile;
 
 // SRAM signals
 reg     [127:0] C_data_in_reg;
@@ -204,11 +195,8 @@ end
 always @(*) begin
     B_row = A_col;
 end
-// TBD
-// assign A_row_tile = A_row[7:2] + |A_row[1:0] - 1; // zero-indexed
-// assign B_col_tile = B_col[7:2] + |B_col[1:0] - 1; // zero-indexed
-assign A_row_tile = A_row[8:2] + |A_row[1:0] - 1; // zero-indexed
-assign B_col_tile = B_col[8:2] + |B_col[1:0] - 1; // zero-indexed
+assign A_row_tile = A_row[ADDR_BITS-1:2] + |A_row[1:0] - 1; // zero-indexed
+assign B_col_tile = B_col[ADDR_BITS-1:2] + |B_col[1:0] - 1; // zero-indexed
 
 // Cycle    PE[0][0]                                    PE[0][1]        PE[0][2]        PE[0][3]        PE[1][3]        PE[2][3]        PE[3][3]
 // -1       Set SRAM signal A[0,0],B[0,0]
@@ -330,9 +318,9 @@ localparam InputOffset = $signed(9'd128);
 // ===============================================================
 //                      Wire & Register
 // ===============================================================
+// wire signed [ 7:0] operand_1, operand_2;
+// wire signed [15:0] prod;
 
-wire signed [ 7:0] operand_1, operand_2;
-wire signed [15:0] prod;
 // ===============================================================
 //                          Design
 // ===============================================================
@@ -340,75 +328,21 @@ wire signed [15:0] prod;
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n)     out_sum <= 0;
     else if (reset) out_sum <= 0;
-    // else            out_sum <= out_sum + prod;
     else            out_sum <= out_sum + ($signed(in_left) + InputOffset) * $signed(in_top);
 end
 
-assign operand_1 =  in_left ^8'h80;
-assign operand_2 =  in_top;
-assign prod =       operand_1 * operand_2;
+// assign operand_1 =  in_left ^8'h80;
+// assign operand_2 =  in_top;
+// assign prod =       operand_1 * operand_2;
 
 // Output Port
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n)     out_bot <= 0;
-    // else if (reset) out_bot <= 0;
     else            out_bot <= in_top;
 end
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n)     out_right <= 0;
-    // else if (reset) out_right <= 0;
     else            out_right <= in_left;
 end
-
 endmodule
-
-// // Processing Element (output stationary)
-// module PE (
-//     clk,
-//     rst_n,
-
-//     reset,
-//     in_top,
-//     in_left,
-//     out_bot,
-//     out_right,
-//     out_sum
-// );
-
-// input clk;
-// input rst_n;
-
-// input reset;
-// input       [ 7:0]  in_top, in_left;
-// output reg  [ 7:0]  out_bot, out_right;
-// output reg  [31:0]  out_sum;
-
-// // ===============================================================
-// //                      Wire & Register
-// // ===============================================================
-
-// // ===============================================================
-// //                          Design
-// // ===============================================================
-// // Accumulated Sum
-// always @(posedge clk or negedge rst_n) begin
-//     if (!rst_n)     out_sum <= 0;
-//     else if (reset) out_sum <= 0;
-//     else            out_sum <= out_sum + in_top * in_left;
-// end
-
-// // Output Port
-// always @(posedge clk or negedge rst_n) begin
-//     if (!rst_n)     out_bot <= 0;
-//     // else if (reset) out_bot <= 0;
-//     else            out_bot <= in_top;
-// end
-
-// always @(posedge clk or negedge rst_n) begin
-//     if (!rst_n)     out_right <= 0;
-//     // else if (reset) out_right <= 0;
-//     else            out_right <= in_left;
-// end
-
-// endmodule
