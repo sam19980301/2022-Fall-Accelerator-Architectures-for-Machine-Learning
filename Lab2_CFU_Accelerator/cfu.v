@@ -34,9 +34,8 @@ module Cfu (
 // FSM
 parameter STATE_IDLE =      'd0;
 parameter STATE_LOAD =      'd1;
-parameter STATE_STORE =     'd2;
-parameter STATE_CALC =      'd3;
-parameter STATE_OUTPUT =    'd4;
+parameter STATE_CALC =      'd2;
+parameter STATE_OUTPUT =    'd3;
 
 // Global buffer
 // Ideally the ADDR_BITS would be 13 / 14 / 14 for fitting
@@ -44,16 +43,13 @@ parameter STATE_OUTPUT =    'd4;
 parameter A_GBUFF_ADDR_BITS =     8;
 parameter B_GBUFF_ADDR_BITS =    14;
 parameter C_GBUFF_ADDR_BITS =     8;
-// parameter A_GBUFF_ADDR_BITS =    13;
-// parameter B_GBUFF_ADDR_BITS =    14;
-// parameter C_GBUFF_ADDR_BITS =    14;
 parameter A_GBUFF_DATA_BITS =    32;
 parameter B_GBUFF_DATA_BITS =    32;
 parameter C_GBUFF_DATA_BITS =   128;
 
 // TPU
+// Ideally the ADDR_BITS would be 12 // MAX_SHAPE: 2304(4095)
 parameter TPU_ADDR_BITS = 9; // MAX_SHAPE: 256(511)
-// parameter TPU_ADDR_BITS = 12; // MAX_SHAPE: 2304(4095)
 
 // Spec
 // op0: Load Store 
@@ -70,7 +66,7 @@ parameter TPU_ADDR_BITS = 9; // MAX_SHAPE: 256(511)
 //                      Wire & Register
 // ===============================================================
 // FSM
-reg     [2:0] current_state, next_state;
+reg     [1:0] current_state, next_state;
 wire    [2:0] opcode;
 wire    [6:0] funct7;
 reg     [6:0] funct7_last_cycle;
@@ -134,11 +130,10 @@ always @(*) begin
     case (current_state)
         STATE_IDLE: if (cmd_valid) begin
             if (is_load)                next_state = STATE_LOAD;
-            else if (is_store)          next_state = STATE_STORE;
+            else if (is_store)          next_state = STATE_OUTPUT;
             else if (is_calc)           next_state = STATE_CALC;
         end
         STATE_LOAD:                     next_state = STATE_OUTPUT;
-        STATE_STORE:                    next_state = STATE_OUTPUT;
         STATE_CALC: if (finish_calc)    next_state = STATE_OUTPUT;
         STATE_OUTPUT: if (rsp_ready)    next_state = STATE_IDLE;
         default:                        next_state = current_state;
