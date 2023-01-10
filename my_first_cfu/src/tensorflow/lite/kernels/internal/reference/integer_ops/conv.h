@@ -61,104 +61,82 @@ inline void ConvPerChannel(
   }
 
   // Check dimensions of the tensors.
-  // const int input_height = input_shape.Dims(1);
-  // const int input_width = input_shape.Dims(2);
   const int filter_height = 1; // filter_shape.Dims(1)
   const int filter_width = 1; // filter_shape.Dims(2)
   const int filter_input_depth = filter_shape.Dims(3);
-  // const int groups = input_depth / filter_input_depth;
   TFLITE_DCHECK_EQ(input_depth % filter_input_depth, 0);
-  // const int filters_per_group = output_depth / groups;
   const int output_height = output_shape.Dims(1);
   const int output_width = output_shape.Dims(2);
+
+  // should ensure that filter_input_depth is multiple of 8
+  TFLITE_DCHECK_EQ(filter_input_depth % 8, 0);
+
+  // set SIMD mode
+  // cfu_op0(/* funct7= */ 0, 0, 0);
+  cfu_op0(/* funct7= */ 1, 0, 0);
+
   for (int batch = 0; batch < batches; ++batch) {
     for (int out_y = 0; out_y < output_height; ++out_y) {
       const int in_y_origin = (out_y * stride_height) - pad_height;
       for (int out_x = 0; out_x < output_width; ++out_x) {
         const int in_x_origin = (out_x * stride_width) - pad_width;
-        for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-          // auto group = out_channel / filters_per_group;
-          
+        for (int out_channel = 0; out_channel < output_depth; ++out_channel) {          
           int32_t acc_cpu = 0;
-          int32_t acc = cfu_op0(/* funct7= */ 1, 0, 0); // resets acc
+          int32_t acc = cfu_op1(/* funct7= */ 1, 0, 0); // reset acc
           for (int filter_y = 0; filter_y < filter_height; ++filter_y) {
             const int in_y = in_y_origin + dilation_height_factor * filter_y;
             for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
               const int in_x = in_x_origin + dilation_width_factor * filter_x;
 
-              // // Zero padding by omitting the areas outside the image.
-              // const bool is_point_inside_image =
-              //     (in_x >= 0) && (in_x < input_width) && (in_y >= 0) &&
-              //     (in_y < input_height);
-
-              // if (!is_point_inside_image) {
-              //   continue;
-              // }
-
-              // for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
-              //   int32_t input_val = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + group * filter_input_depth)];
-              //   int32_t filter_val = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel)];
-              //   acc += filter_val * (input_val + input_offset);
-              // }
-
               // loop unrolling
-              for (int in_channel = 0; in_channel < filter_input_depth; in_channel+=4) {
-                
-                // int32_t input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel)];
-                // int32_t filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel)];
-                // acc_cpu += filter_val_cpu * (input_val_cpu + input_offset);
-
-                // input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 1)];
-                // filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 1)];
-                // acc_cpu += filter_val_cpu * (input_val_cpu + input_offset);
-
-                // input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 2)];
-                // filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 2)];
-                // acc_cpu += filter_val_cpu * (input_val_cpu + input_offset);
-
-                // input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 3)];
-                // filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 3)];
-                // acc_cpu += filter_val_cpu * (input_val_cpu + input_offset);
-
-                // uint32_t input_val = *((uint32_t *)(input_data + Offset(input_shape, batch, in_y, in_x, in_channel)));
-                // uint32_t filter_val = *((uint32_t *)(filter_data + Offset(filter_shape, out_channel, filter_y, filter_x, in_channel)));
-                // acc = cfu_op0(/* funct7= */ 0, /* in0= */ input_val, /* in1= */ filter_val);
-
-                // Modified -> without offset
+              for (int in_channel = 0; in_channel < filter_input_depth; in_channel+=8) {
                 uint8_t input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel)];
                 uint8_t filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel)];
-                acc_cpu += filter_val_cpu * input_val_cpu;
-                // printf("input_val_cpu:\t\t%lx \t\t%ld\n", input_val_cpu, input_val_cpu);
-                // printf("filter_val_cpu:\t\t%lx \t\t%ld\n", filter_val_cpu, filter_val_cpu);
-                // printf("acc_cpu:\t\t%lx \t\t%ld\n", acc_cpu, acc_cpu);
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
 
                 input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 1)];
                 filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 1)];
-                acc_cpu += filter_val_cpu * input_val_cpu;
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
 
                 input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 2)];
                 filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 2)];
-                acc_cpu += filter_val_cpu * input_val_cpu;
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
 
                 input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 3)];
                 filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 3)];
-                acc_cpu += filter_val_cpu * input_val_cpu;
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
 
-                uint32_t input_val = *((uint32_t *)(input_data + Offset(input_shape, batch, in_y, in_x, in_channel)));
-                uint32_t filter_val = *((uint32_t *)(filter_data + Offset(filter_shape, out_channel, filter_y, filter_x, in_channel)));
-                acc = cfu_op0(/* funct7= */ 0, /* in0= */ input_val, /* in1= */ filter_val);
-                // printf("input_val:\t\t%lx \t\t%ld\n", input_val, input_val);
-                // printf("filter_val:\t\t%lx \t\t%ld\n", filter_val, filter_val);
-                // printf("acc:\t\t%lx \t\t%ld\n", acc, acc);
+                input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 4)];
+                filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel)];
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
+
+                input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 5)];
+                filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 1)];
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
+
+                input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 6)];
+                filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 2)];
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
+
+                input_val_cpu = input_data[Offset(input_shape, batch, in_y, in_x, in_channel + 7)];
+                filter_val_cpu = filter_data[Offset(filter_shape, out_channel, filter_y, filter_x, in_channel + 3)];
+                acc_cpu += (filter_val_cpu % 16) * (input_val_cpu % 16);
+                acc_cpu += (filter_val_cpu / 16) * (input_val_cpu / 16);
+                
+                uint64_t input_val = *((uint64_t *)(input_data + Offset(input_shape, batch, in_y, in_x, in_channel)));
+                uint64_t filter_val = *((uint64_t *)(filter_data + Offset(filter_shape, out_channel, filter_y, filter_x, in_channel)));
+                cfu_op2(/* funct7= */ 0, /* in0= */ ( input_val & 0xFFFFFFFF00000000) >> 32, /* in1= */ (filter_val & 0xFFFFFFFF00000000) >> 32);
+                acc = cfu_op3(/* funct7= */ 0, /* in0= */ input_val, /* in1= */ filter_val);
 
                 // check correctness
-                // exit(0);
-                if (acc_cpu != acc)
-                {
-                  printf("acc_cpu:\t\t%ld\t\tacc_cfu:\t\t%ld\n", acc_cpu, acc);
-                  exit(0);
-                  return ;
-                }
+                TFLITE_DCHECK_EQ(acc_cpu, acc);
               }
             }
           }
@@ -166,8 +144,7 @@ inline void ConvPerChannel(
           if (bias_data) {
             acc += bias_data[out_channel];
           }
-          acc = MultiplyByQuantizedMultiplier(
-              acc, output_multiplier[out_channel], output_shift[out_channel]);
+          acc = MultiplyByQuantizedMultiplier(acc, output_multiplier[out_channel], output_shift[out_channel]);
           acc += output_offset;
           acc = std::max(acc, output_activation_min);
           acc = std::min(acc, output_activation_max);
