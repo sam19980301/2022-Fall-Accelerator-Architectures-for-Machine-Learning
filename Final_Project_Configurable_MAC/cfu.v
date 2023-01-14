@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-`include "bitblade.v"
+
 
 module Cfu (
   input               cmd_valid,
@@ -26,79 +26,33 @@ module Cfu (
   input               reset,
   input               clk
 );
+  localparam InputOffset = $signed(9'd128);
 
-// ===============================================================
-//                      Wire & Register
-// ===============================================================
-// FSM
-// since all instruction could be done within 1 cycle, FSM is not required
-wire  [2:0] opcode;
-wire  is_setting_mode, is_resetting_acc, is_accumlating, is_loading_upper;
+  // SIMD multiply step:
+  wire signed [15:0] prod_0, prod_1, prod_2, prod_3;
 
-// Metadata
-reg         mode; // 0/1: 8/4-bit data foramt
+  assign prod_0 =  ($signed(cmd_payload_inputs_0[7 : 0]) + InputOffset) * $signed(cmd_payload_inputs_1[7 : 0]);
+  assign prod_1 =  ($signed(cmd_payload_inputs_0[15: 8]) + InputOffset) * $signed(cmd_payload_inputs_1[15: 8]);
+  assign prod_2 =  ($signed(cmd_payload_inputs_0[23:16]) + InputOffset) * $signed(cmd_payload_inputs_1[23:16]);
+  assign prod_3 =  ($signed(cmd_payload_inputs_0[31:24]) + InputOffset) * $signed(cmd_payload_inputs_1[31:24]);
 
-// Bitblade Signal
-reg   [31:0] upper_bitblade_in_a;
-reg   [31:0] upper_bitblade_in_b;
-wire  [63:0] bitblade_in_a;
-wire  [63:0] bitblade_in_b;
-wire  [31:0] bitblade_out_c;
+  wire signed [31:0] sum_prods;
+  assign sum_prods = prod_0 + prod_1 + prod_2 + prod_3;
 
-// ===============================================================
-//                          Design
-// ===============================================================
-// FSM
-assign opcode = cmd_payload_function_id[2:0];
-assign is_setting_mode =  (cmd_valid) && (opcode == 0);
-assign is_resetting_acc = (cmd_valid) && (opcode == 1);
-assign is_loading_upper = (cmd_valid) && (opcode == 2);
-assign is_accumlating =   (cmd_valid) && (opcode == 3);
+  // Only not ready for a command when we have a response.
+  assign cmd_ready = ~rsp_valid;
 
-// Metadata
-always @(posedge clk) begin
-  if (reset)
-    mode <= 0; // default is set to mode 0
-  else if (is_setting_mode)
-    mode <= cmd_payload_function_id[3];
-end
-
-// Output Logic
-// only not ready for a command when we have a response.
-assign cmd_ready = ~rsp_valid;
-
-always @(posedge clk) begin
-  if (reset)          rsp_valid <= 1'b0;
-  else if (rsp_valid) rsp_valid <= ~rsp_ready;  // waiting for hand off response to CPU. 
-  else if (cmd_valid) rsp_valid <= 1'b1;        // accumulation step
-end
-
-always @(posedge clk) begin
-  if (reset)
-    rsp_payload_outputs_0 <= 32'b0;
-  else if (is_resetting_acc)
-    rsp_payload_outputs_0 <= 32'b0;
-  else if (is_accumlating)
-    rsp_payload_outputs_0 <= rsp_payload_outputs_0 + bitblade_out_c;
-end
-
-// SIMD modules
-always @(posedge clk) begin
-  if (reset)                  upper_bitblade_in_a <= 0;
-  else if (is_loading_upper)  upper_bitblade_in_a <= cmd_payload_inputs_0;
-end
-
-always @(posedge clk) begin
-  if (reset)                  upper_bitblade_in_b <= 0;
-  else if (is_loading_upper)  upper_bitblade_in_b <= cmd_payload_inputs_1;
-end
-
-assign bitblade_in_a = {upper_bitblade_in_a, cmd_payload_inputs_0};
-assign bitblade_in_b = {upper_bitblade_in_b, cmd_payload_inputs_1};
-Bitblade bitblade(
-  .mode(mode),
-  .in_a(bitblade_in_a),
-  .in_b(bitblade_in_b),
-  .out_c(bitblade_out_c)
-);
+  always @(posedge clk) begin
+    if (reset) begin
+      rsp_payload_outputs_0 <= 32'b0;
+      rsp_valid <= 1'b0;
+    end else if (rsp_valid) begin
+      // Waiting to hand off response to CPU.
+      rsp_valid <= ~rsp_ready;
+    end else if (cmd_valid) begin
+      rsp_valid <= 1'b1;
+      // Accumulate step:
+      rsp_payload_outputs_0 <= |cmd_payload_function_id[9:3] ? 32'b0 : rsp_payload_outputs_0 + sum_prods;
+    end
+  end
 endmodule
