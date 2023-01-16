@@ -56,7 +56,7 @@ static void do_classify() {
 }
 
 #define NUM_GOLDEN 2
-static int32_t golden_results[NUM_GOLDEN] = {-2, -23};
+static int32_t golden_results[NUM_GOLDEN] = {68, -12};
 
 static void do_golden_tests() {
   int32_t actual[NUM_GOLDEN];
